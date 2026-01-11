@@ -94,3 +94,40 @@ if 'strong_stocks' in st.session_state:
             exp1 = df_stock['Close'].ewm(span=12, adjust=False).mean()
             exp2 = df_stock['Close'].ewm(span=26, adjust=False).mean()
             df_stock['DIF'] = exp1 - exp2
+            df_stock['MACD_L'] = df_stock['DIF'].ewm(span=9, adjust=False).mean()
+            df_stock['OSC'] = df_stock['DIF'] - df_stock['MACD_L']
+
+            # 只取最近 6 個月顯示，避免圖表太長，但 MA 計算已經完成
+            plot_df = df_stock.tail(120)
+
+            # 3. 建立子圖
+            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.5, 0.2, 0.3])
+
+            # (A) K線圖
+            fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='K線'), row=1, col=1)
+            
+            # 加入多天期均線
+            ma_configs = [
+                ('MA5', 'LightSkyBlue', '5MA(週)'),
+                ('MA20', 'orange', '20MA(月)'),
+                ('MA60', 'green', '60MA(季)'),
+                ('MA120', 'purple', '120MA(半年)'),
+                ('MA240', 'red', '240MA(年)')
+            ]
+            for col, color, name in ma_configs:
+                fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df[col], line=dict(color=color, width=1), name=name), row=1, col=1)
+
+            # (B) 成交量
+            bar_colors = ['#EF5350' if c >= o else '#26A69A' for c, o in zip(plot_df['Close'], plot_df['Open'])]
+            fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume'], name='成交量', marker_color=bar_colors), row=2, col=1)
+
+            # (C) MACD
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['DIF'], name='DIF', line=dict(color='black')), row=3, col=1)
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MACD_L'], name='MACD', line=dict(color='red')), row=3, col=1)
+            osc_colors = ['#EF5350' if x >= 0 else '#26A69A' for x in plot_df['OSC']]
+            fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['OSC'], name='OSC', marker_color=osc_colors), row=3, col=1)
+
+            fig.update_layout(height=900, xaxis_rangeslider_visible=False, template="plotly_white", hovermode='x unified')
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.write("📖 **技術教室**：當短天期均線(5, 20)在長天期均線(60, 240)之上且全部向上延伸，即為『多頭排列』。")
