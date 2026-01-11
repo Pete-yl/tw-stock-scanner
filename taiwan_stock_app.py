@@ -3,13 +3,15 @@ import pandas as pd
 import requests
 import io
 import urllib3
+import yfinance as yf
 from datetime import datetime, timedelta
-import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-# 1. 忽略 SSL 警告
+# 忽略 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-st.set_page_config(page_title="台股強勢族群掃描器", layout="wide")
+st.set_page_config(page_title="台股強勢股全功能分析", layout="wide")
 
 def get_valid_date():
     now = datetime.now()
@@ -35,75 +37,76 @@ def fetch_data(date_str):
         df.columns = [str(c).replace('\"', '').strip() for c in df.columns]
         for col in df.columns:
             df[col] = df[col].astype(str).str.replace('\"', '').str.replace(',', '').str.strip()
-        if '產業別' not in df.columns: df['產業別'] = '一般股票'
         
         cols_to_fix = ['成交金額', '漲跌價差', '收盤價']
         for col in cols_to_fix:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         
         if '漲跌(+/-)' in df.columns:
-            df['漲跌符號'] = df['漲跌(+/-)'].str.extract('([+-])')
-            df['實際漲跌'] = df.apply(lambda x: x['漲跌價差'] if x['漲跌符號'] == '+' else -x['漲跌價差'] if x['漲跌符號'] == '-' else 0, axis=1)
+            df['實際漲跌'] = df.apply(lambda x: x['漲跌價差'] if '+' in x['漲跌(+/-)'] else -x['漲跌價差'] if '-' in x['漲跌(+/-)'] else 0, axis=1)
             df['漲幅(%)'] = (df['實際漲跌'] / (df['收盤價'] - df['實際漲跌'])) * 100
-        else:
-            df['漲幅(%)'] = 0.0
         return df
-    except Exception as e:
-        st.error(f"錯誤: {e}")
-        return None
+    except: return None
 
-# --- UI 介面 ---
-st.title("🚀 台股強勢族群掃描器 (含個股新聞)")
+# --- 介面設計 ---
+st.title("🚀 台股強勢股：量價與 MACD 綜合分析")
 
 default_date = get_valid_date()
 selected_date = st.sidebar.date_input("📅 選擇掃描日期", default_date)
 date_str = selected_date.strftime("%Y%m%d")
 
-if st.button('🔥 開始掃描行情'):
-    with st.spinner(f'正在分析數據...'):
-        all_df = fetch_data(date_str)
-        if all_df is not None:
-            top_30 = all_df.sort_values(by='成交金額', ascending=False).head(30)
-            strong_stocks = top_30[top_30['漲幅(%)'] > 3].copy()
-            
-            if not strong_stocks.empty:
-                # --- 新增：產生新聞搜尋連結 ---
-                # 連結格式：Google 新聞搜尋
-                strong_stocks['新聞連結'] = strong_stocks.apply(
-                    lambda x: f"https://www.google.com/search?q={x['證券代號']}+{x['證券名稱']}+新聞&tbm=nws", axis=1
-                )
-                
-                st.subheader(f"✅ 符合條件標的 (共 {len(strong_stocks)} 檔)")
-                st.info("💡 提示：點擊下表中的「查看新聞」連結，會自動跳轉至該股搜尋結果。")
-
-                # 使用 st.column_config 將 URL 轉換為可點擊的按鈕或連結
-                st.data_editor(
-                    strong_stocks[['證券代號', '證券名稱', '產業別', '收盤價', '漲幅(%)', '成交金額', '新聞連結']],
-                    column_config={
-                        "新聞連結": st.column_config.LinkColumn(
-                            "個股新聞",
-                            help="點擊跳轉至 Google 新聞搜尋",
-                            validate="^http://.*",
-                            display_text="查看新聞" # 表格中顯示的文字
-                        ),
-                        "漲幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
-                        "成交金額": st.column_config.NumberColumn(format="%d"),
-                    },
-                    hide_index=True,
-                    use_container_width=True
-                )
-                
-                st.subheader("📊 產業族群分布圖")
-                fig = px.treemap(
-                    strong_stocks, path=['產業別', '證券名稱'], values='成交金額',
-                    color='漲幅(%)', color_continuous_scale='Reds',
-                    hover_data=['收盤價']
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning("沒有符合條件的股票。")
+if st.button('🔥 開始全自動掃描'):
+    all_df = fetch_data(date_str)
+    if all_df is not None:
+        top_30 = all_df.sort_values(by='成交金額', ascending=False).head(30)
+        strong_stocks = top_30[top_30['漲幅(%)'] > 3].copy()
+        if not strong_stocks.empty:
+            st.session_state['strong_stocks'] = strong_stocks
+            st.success(f"找到 {len(strong_stocks)} 檔強勢標的")
+            st.dataframe(strong_stocks[['證券代號', '證券名稱', '收盤價', '漲幅(%)', '成交金額']], use_container_width=True)
         else:
-            st.error("無法取得資料。")
+            st.warning("無符合條件股票。")
 
-st.divider()
-st.caption("資料來源：臺灣證券交易所。")
+# --- 進階線型區塊 ---
+if 'strong_stocks' in st.session_state:
+    st.divider()
+    options = st.session_state['strong_stocks'].apply(lambda x: f"{x['證券代號']} {x['證券名稱']}", axis=1).tolist()
+    target_stock = st.selectbox("🎯 選擇標的查看型態與指標：", options)
+    
+    if target_stock:
+        symbol = target_stock.split(' ')[0] + ".TW"
+        df_stock = yf.download(symbol, period="6mo", interval="1d")
+        
+        if not df_stock.empty:
+            # 1. 計算均線
+            df_stock['MA20'] = df_stock['Close'].rolling(window=20).mean()
+            # 2. 計算 MACD
+            exp1 = df_stock['Close'].ewm(span=12, adjust=False).mean()
+            exp2 = df_stock['Close'].ewm(span=26, adjust=False).mean()
+            df_stock['DIF'] = exp1 - exp2
+            df_stock['MACD_Line'] = df_stock['DIF'].ewm(span=9, adjust=False).mean()
+            df_stock['OSC'] = df_stock['DIF'] - df_stock['MACD_Line']
+
+            # 3. 建立子圖 (K線、成交量、MACD)
+            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
+                               vertical_spacing=0.05, 
+                               row_heights=[0.5, 0.2, 0.3])
+
+            # (A) K線圖 + MA20
+            fig.add_trace(go.Candlestick(x=df_stock.index, open=df_stock['Open'], high=df_stock['High'],
+                                        low=df_stock['Low'], close=df_stock['Close'], name='K線'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_stock.index, y=df_stock['MA20'], line=dict(color='orange', width=1.5), name='月線'), row=1, col=1)
+
+            # (B) 成交量 (顏色邏輯：今日收盤 > 昨日收盤 則 紅色)
+            colors = ['red' if df_stock['Close'].iloc[i] >= df_stock['Open'].iloc[i] else 'green' for i in range(len(df_stock))]
+            fig.add_trace(go.Bar(x=df_stock.index, y=df_stock['Volume'], name='成交量', marker_color=colors), row=2, col=1)
+
+            # (C) MACD
+            fig.add_trace(go.Scatter(x=df_stock.index, y=df_stock['DIF'], line=dict(color='blue', width=1), name='DIF'), row=3, col=1)
+            fig.add_trace(go.Scatter(x=df_stock.index, y=df_stock['MACD_Line'], line=dict(color='red', width=1), name='MACD'), row=3, col=1)
+            # MACD 柱狀圖 (OSC)
+            osc_colors = ['red' if x >= 0 else 'green' for x in df_stock['OSC']]
+            fig.add_trace(go.Bar(x=df_stock.index, y=df_stock['OSC'], name='OSC', marker_color=osc_colors), row=3, col=1)
+
+            fig.update_layout(height=800, title_text=f"{target_stock} 綜合技術分析", xaxis_rangeslider_visible=False)
+            st.plotly_chart(fig, use_container_width=True)
