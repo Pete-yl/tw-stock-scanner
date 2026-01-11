@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 # 忽略 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-st.set_page_config(page_title="台股強勢股全功能分析", layout="wide")
+st.set_page_config(page_title="台股強勢股分析器", layout="wide")
 
 def get_valid_date():
     now = datetime.now()
@@ -49,7 +49,7 @@ def fetch_data(date_str):
     except: return None
 
 # --- 介面設計 ---
-st.title("🚀 台股強勢股：量價與 MACD 綜合分析")
+st.title("🚀 台股強勢股：綜合技術分析")
 
 default_date = get_valid_date()
 selected_date = st.sidebar.date_input("📅 選擇掃描日期", default_date)
@@ -75,37 +75,44 @@ if 'strong_stocks' in st.session_state:
     
     if target_stock:
         symbol = target_stock.split(' ')[0] + ".TW"
-        df_stock = yf.download(symbol, period="6mo", interval="1d")
+        # 修正：使用 auto_adjust 確保欄位名稱統一
+        df_stock = yf.download(symbol, period="6mo", interval="1d", auto_adjust=True)
         
         if not df_stock.empty:
-            # 1. 計算均線
+            # 確保欄位是單層索引
+            if isinstance(df_stock.columns, pd.MultiIndex):
+                df_stock.columns = df_stock.columns.get_level_values(0)
+
+            # 1. 計算指標
             df_stock['MA20'] = df_stock['Close'].rolling(window=20).mean()
-            # 2. 計算 MACD
             exp1 = df_stock['Close'].ewm(span=12, adjust=False).mean()
             exp2 = df_stock['Close'].ewm(span=26, adjust=False).mean()
             df_stock['DIF'] = exp1 - exp2
             df_stock['MACD_Line'] = df_stock['DIF'].ewm(span=9, adjust=False).mean()
             df_stock['OSC'] = df_stock['DIF'] - df_stock['MACD_Line']
 
-            # 3. 建立子圖 (K線、成交量、MACD)
+            # 2. 建立子圖
             fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
                                vertical_spacing=0.05, 
                                row_heights=[0.5, 0.2, 0.3])
 
-            # (A) K線圖 + MA20
+            # (A) K線圖
             fig.add_trace(go.Candlestick(x=df_stock.index, open=df_stock['Open'], high=df_stock['High'],
                                         low=df_stock['Low'], close=df_stock['Close'], name='K線'), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_stock.index, y=df_stock['MA20'], line=dict(color='orange', width=1.5), name='月線'), row=1, col=1)
 
-            # (B) 成交量 (顏色邏輯：今日收盤 > 昨日收盤 則 紅色)
-            colors = ['red' if df_stock['Close'].iloc[i] >= df_stock['Open'].iloc[i] else 'green' for i in range(len(df_stock))]
-            fig.add_trace(go.Bar(x=df_stock.index, y=df_stock['Volume'], name='成交量', marker_color=colors), row=2, col=1)
+            # (B) 成交量 (修正邏輯：處理 Series 比較)
+            # 漲紅跌綠：當日收盤價 >= 當日開盤價
+            bar_colors = ['#EF5350' if close >= open_val else '#26A69A' 
+                          for close, open_val in zip(df_stock['Close'], df_stock['Open'])]
+            
+            fig.add_trace(go.Bar(x=df_stock.index, y=df_stock['Volume'], name='成交量', marker_color=bar_colors), row=2, col=1)
 
             # (C) MACD
             fig.add_trace(go.Scatter(x=df_stock.index, y=df_stock['DIF'], line=dict(color='blue', width=1), name='DIF'), row=3, col=1)
             fig.add_trace(go.Scatter(x=df_stock.index, y=df_stock['MACD_Line'], line=dict(color='red', width=1), name='MACD'), row=3, col=1)
-            # MACD 柱狀圖 (OSC)
-            osc_colors = ['red' if x >= 0 else 'green' for x in df_stock['OSC']]
+            
+            osc_colors = ['#EF5350' if x >= 0 else '#26A69A' for x in df_stock['OSC']]
             fig.add_trace(go.Bar(x=df_stock.index, y=df_stock['OSC'], name='OSC', marker_color=osc_colors), row=3, col=1)
 
             fig.update_layout(height=800, title_text=f"{target_stock} 綜合技術分析", xaxis_rangeslider_visible=False)
